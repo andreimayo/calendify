@@ -40,7 +40,7 @@
           on:click={navigateToCalendar}
           in:fade={{ duration: 1000, delay: 1000 }}
         >
-          Get Started
+          Open
         </button>
       </div>
     {/if}

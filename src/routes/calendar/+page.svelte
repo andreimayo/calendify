@@ -1,218 +1,403 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
-    import { fade, fly } from 'svelte/transition';
-    import { cubicOut } from 'svelte/easing';
-  
-    interface Event {
-      id: number;
-      title: string;
-      date: Date;
-    }
-  
-    let currentDate: Date = new Date();
-    let selectedDate: Date = new Date();
-    let events: Event[] = [];
-    let newEventTitle: string = '';
-    let editingEvent: Event | null = null;
-    let showModal: boolean = false;
-    let showEventList: boolean = false;
-  
-    // Safe deserialization from localStorage
-    onMount(() => {
-      const storedEvents = localStorage.getItem('calendarEvents');
-      if (storedEvents) {
-        events = JSON.parse(storedEvents).map((event: any): Event => ({
-          id: event.id ?? Date.now(), // Ensure id is always a number
-          title: event.title || 'Untitled Event',
-          date: event.date ? new Date(event.date) : new Date() // Ensure valid Date
-        }));
-      }
-    });
-  
-    // Save to localStorage when events change
-    $: {
-      if (events.length > 0) {
-        localStorage.setItem('calendarEvents', JSON.stringify(events));
-      }
-    }
-  
-    // Utility Functions
-    function getDaysInMonth(year: number, month: number): number {
-      return new Date(year, month + 1, 0).getDate();
-    }
-  
-    function getFirstDayOfMonth(year: number, month: number): number {
-      return new Date(year, month, 1).getDay();
-    }
-  
-    // Reactive statements for calendar grid
-    $: daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
-    $: firstDayOfMonth = getFirstDayOfMonth(currentDate.getFullYear(), currentDate.getMonth());
-  
-    // Navigation
-    function previousMonth(): void {
-      currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
-    }
-  
-    function nextMonth(): void {
-      currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
-    }
-  
-    function selectDate(day: number): void {
-      selectedDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-    }
-  
-    // Event Management
-    function addEvent(): void {
-      if (newEventTitle.trim()) {
-        const newEvent: Event = {
-          id: Date.now(),
-          title: newEventTitle,
-          date: new Date(selectedDate) // Ensure it's a Date object
-        };
-        events = [...events, newEvent];
-        newEventTitle = '';
-        showModal = false;
-      }
-    }
-  
-    function editEvent(event: Event): void {
-      editingEvent = {
-        id: event.id,
+  import { onMount } from 'svelte';
+  import { fade, fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+
+  interface Event {
+    id: number;
+    title: string;
+    date: Date;
+  }
+
+  interface Notification {
+    id: number;
+    message: string;
+    type: 'add' | 'edit' | 'delete';
+    timestamp: Date;
+  }
+
+  let currentDate: Date = new Date();
+  let selectedDate: Date = new Date();
+  let events: Event[] = [];
+  let newEventTitle: string = '';
+  let editingEvent: Event | null = null;
+  let showModal: boolean = false;
+  let showEventList: boolean = false;
+  let showNotification: boolean = false;
+  let notificationMessage: string = '';
+  let notifications: Notification[] = [];
+  let showNotificationPanel: boolean = false;
+
+  onMount(() => {
+    const storedEvents = localStorage.getItem('calendarEvents');
+    if (storedEvents) {
+      events = JSON.parse(storedEvents).map((event: any): Event => ({
+        id: event.id || Date.now(),
         title: event.title,
         date: new Date(event.date)
+      }));
+    }
+    checkUpcomingEvents();
+  });
+
+  $: {
+    if (events.length > 0) {
+      localStorage.setItem('calendarEvents', JSON.stringify(events));
+    }
+  }
+
+  function getDaysInMonth(year: number, month: number): number {
+    return new Date(year, month + 1, 0).getDate();
+  }
+
+  function getFirstDayOfMonth(year: number, month: number): number {
+    return new Date(year, month, 1).getDay();
+  }
+
+  $: daysInMonth = getDaysInMonth(currentDate.getFullYear(), currentDate.getMonth());
+  $: firstDayOfMonth = getFirstDayOfMonth(currentDate.getFullYear(), currentDate.getMonth());
+
+  function previousMonth(): void {
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+  }
+
+  function nextMonth(): void {
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+  }
+
+  function selectDate(day: number): void {
+    selectedDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+  }
+
+  function showNotificationAlert(message: string): void {
+    notificationMessage = message;
+    showNotification = true;
+    setTimeout(() => {
+      showNotification = false;
+    }, 3000);
+  }
+
+  function addNotification(message: string, type: 'add' | 'edit' | 'delete'): void {
+    notifications = [
+      {
+        id: Date.now(),
+        message,
+        type,
+        timestamp: new Date()
+      },
+      ...notifications
+    ];
+  }
+
+  function addEvent(): void {
+    if (newEventTitle.trim()) {
+      const newEvent: Event = {
+        id: Date.now(),
+        title: newEventTitle,
+        date: selectedDate
       };
-      newEventTitle = event.title;
-      showModal = true;
+      events = [...events, newEvent];
+      newEventTitle = '';
+      showModal = false;
+      showNotificationAlert('Event added successfully');
+      addNotification(`Added event: ${newEvent.title}`, 'add');
+      checkUpcomingEvents();
     }
-  
-    function updateEvent(): void {
-      if (editingEvent && newEventTitle.trim()) {
-        events = events.map(e => 
-          e.id === editingEvent?.id ? { ...editingEvent, title: newEventTitle } : e
-        );
-        newEventTitle = '';
-        editingEvent = null;
-        showModal = false;
-      }
+  }
+
+  function editEvent(event: Event): void {
+    editingEvent = { ...event };
+    newEventTitle = event.title;
+    showModal = true;
+  }
+
+  function updateEvent(): void {
+    if (!editingEvent || !newEventTitle.trim()) return;
+    const eventId = editingEvent.id;
+    events = events.map(e => e.id === eventId ? { ...e, title: newEventTitle } : e);
+    addNotification(`Updated event: ${newEventTitle}`, 'edit');
+    newEventTitle = '';
+    editingEvent = null;
+    showModal = false;
+    showNotificationAlert('Event updated successfully');
+    checkUpcomingEvents();
+  }
+
+  function deleteEvent(id: number): void {
+    const eventToDelete = events.find(e => e.id === id);
+    if (eventToDelete) {
+      addNotification(`Deleted event: ${eventToDelete.title}`, 'delete');
     }
-  
-    function deleteEvent(id: number): void {
-      events = events.filter(e => e.id !== id);
-    }
-  
-    // Filter events for selected date
-    $: selectedDateEvents = events.filter(
-      (event: Event) => event.date?.toDateString() === selectedDate.toDateString()
-    );
-  
-    function formatDate(date: Date): string {
-      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    }
-  </script>
-  
-  <main class="min-h-screen bg-gradient-to-br from-emerald-400 via-cyan-500 to-blue-500 text-white p-4">
-    <div class="container mx-auto">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 to-yellow-500">
-          Calendify
-        </h1>
-        <div class="space-x-4">
-          <button
-            on:click={() => showEventList = !showEventList}
-            class="px-6 py-2 bg-white bg-opacity-20 rounded-full text-white font-semibold hover:bg-opacity-30 transition-all duration-300"
-          >
-            {showEventList ? 'Hide' : 'Show'} Event List
+    events = events.filter(e => e.id !== id);
+    showNotificationAlert('Event deleted successfully');
+    checkUpcomingEvents();
+  }
+
+  function checkUpcomingEvents(): void {
+    const today = new Date();
+    const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+    upcomingEvents = events.filter(event => {
+      const eventDate = new Date(event.date);
+      return eventDate >= today && eventDate <= nextWeek;
+    });
+    // Trigger reactivity
+    notifications = notifications;
+  }
+
+  $: selectedDateEvents = events.filter(
+    (event: Event) => event.date.toDateString() === selectedDate.toDateString()
+  );
+
+  function formatDate(date: Date): string {
+    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+
+  function formatNotificationDate(date: Date): string {
+    return date.toLocaleString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  }
+
+  function NotificationIcon(): string {
+    return '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>';
+  }
+
+  let upcomingEvents: Event[] = [];
+
+</script>
+
+<main class="min-h-screen bg-gradient-to-br from-emerald-400 via-cyan-500 to-blue-500 text-white p-4">
+  <div class="container mx-auto">
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 to-yellow-500">
+        Calendify
+      </h1>
+      <div class="space-x-4 flex items-center">
+        <button
+          on:click={() => showEventList = !showEventList}
+          class="px-6 py-2 bg-white bg-opacity-20 rounded-full text-white font-semibold hover:bg-opacity-30 transition-all duration-300"
+        >
+          {showEventList ? 'Hide' : 'Show'} Event List
+        </button>
+        <button
+          on:click={() => showNotificationPanel = !showNotificationPanel}
+          class="relative p-2 bg-white bg-opacity-20 rounded-full text-white hover:bg-opacity-30 transition-all duration-300"
+          aria-label="Show notifications and upcoming events"
+        >
+          {@html NotificationIcon()}
+          {#if notifications.length > 0 || upcomingEvents.length > 0}
+            <span class="absolute top-0 right-0 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+              {notifications.length + upcomingEvents.length}
+            </span>
+          {/if}
+        </button>
+        <a
+          href="/"
+          class="px-6 py-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full text-white font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all duration-300"
+        >
+          Back to Home
+        </a>
+      </div>
+    </div>
+
+    <div class="flex flex-col lg:flex-row gap-8">
+      <div class="flex-1 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
+        <div class="flex justify-between items-center mb-4">
+          <button on:click={previousMonth} class="text-white hover:text-yellow-200 transition-colors">
+            &lt; Previous
           </button>
-          <a
-            href="/"
-            class="px-6 py-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full text-white font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all duration-300"
-          >
-            Back to Home
-          </a>
+          <h2 class="text-2xl font-semibold">
+            {currentDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+          </h2>
+          <button on:click={nextMonth} class="text-white hover:text-yellow-200 transition-colors">
+            Next &gt;
+          </button>
+        </div>
+        <div class="grid grid-cols-7 gap-2">
+          {#each ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as day}
+            <div class="text-center font-semibold">{day}</div>
+          {/each}
+          {#each Array(firstDayOfMonth).fill(null) as _}
+            <div></div>
+          {/each}
+          {#each Array(daysInMonth).fill(null).map((_, i) => i + 1) as day}
+            <button
+              class="p-2 text-center rounded hover:bg-white hover:bg-opacity-20 transition-colors"
+              class:bg-yellow-300={selectedDate.getDate() === day && 
+                                   selectedDate.getMonth() === currentDate.getMonth() && 
+                                   selectedDate.getFullYear() === currentDate.getFullYear()}
+              class:text-blue-900={selectedDate.getDate() === day && 
+                                   selectedDate.getMonth() === currentDate.getMonth() && 
+                                   selectedDate.getFullYear() === currentDate.getFullYear()}
+              on:click={() => selectDate(day)}
+            >
+              {day}
+            </button>
+          {/each}
         </div>
       </div>
-  
-      <div class="flex flex-col lg:flex-row gap-8">
-        <!-- Calendar Section -->
-        <div class="flex-1 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
-          <div class="flex justify-between items-center mb-4">
-            <button on:click={previousMonth} class="text-white hover:text-yellow-200 transition-colors">
-              &lt; Previous
-            </button>
-            <h2 class="text-2xl font-semibold">
-              {currentDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
-            </h2>
-            <button on:click={nextMonth} class="text-white hover:text-yellow-200 transition-colors">
-              Next &gt;
-            </button>
-          </div>
-          <div class="grid grid-cols-7 gap-2">
-            {#each ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as day}
-              <div class="text-center font-semibold">{day}</div>
+
+      <div class="flex-1 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
+        <h3 class="text-2xl font-semibold mb-4">Events for {formatDate(selectedDate)}</h3>
+        {#if selectedDateEvents.length > 0}
+          <ul class="space-y-2">
+            {#each selectedDateEvents as event (event.id)}
+              <li in:fade={{ duration: 300 }} out:fade={{ duration: 200 }} class="flex justify-between items-center p-3 bg-white bg-opacity-20 rounded-lg">
+                <span>{event.title}</span>
+                <div>
+                  <button 
+                    on:click={() => editEvent(event)}
+                    class="text-yellow-200 hover:text-yellow-400 transition-colors mr-2"
+                  >
+                    Edit
+                  </button>
+                  <button 
+                    on:click={() => deleteEvent(event.id)}
+                    class="text-red-300 hover:text-red-500 transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
             {/each}
-            {#each Array(firstDayOfMonth).fill(null) as _}
-              <div></div>
+          </ul>
+        {:else}
+          <p class="text-gray-200">No events for this date.</p>
+        {/if}
+        <button
+          on:click={() => { editingEvent = null; showModal = true; }}
+          class="mt-4 px-6 py-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full text-white font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all duration-300"
+        >
+          Add Event
+        </button>
+      </div>
+    </div>
+
+    {#if showEventList}
+      <div in:fly={{ y: 50, duration: 500, easing: cubicOut }} out:fade={{ duration: 300 }} class="mt-8 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
+        <h3 class="text-2xl font-semibold mb-4">All Events</h3>
+        {#if events.length > 0}
+          <ul class="space-y-2">
+            {#each events.sort((a, b) => a.date.getTime() - b.date.getTime()) as event (event.id)}
+              <li class="flex justify-between items-center p-3 bg-white bg-opacity-20 rounded-lg">
+                <span>{event.title} - {formatDate(event.date)}</span>
+                <div>
+                  <button 
+                    on:click={() => editEvent(event)}
+                    class="text-yellow-200 hover:text-yellow-400 transition-colors mr-2"
+                  >
+                    Edit
+                  </button>
+                  <button 
+                    on:click={() => deleteEvent(event.id)}
+                    class="text-red-300 hover:text-red-500 transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
             {/each}
-            {#each Array(daysInMonth).fill().map((_, i) => i + 1) as day}
-              <button
-                class="p-2 text-center rounded hover:bg-white hover:bg-opacity-20 transition-colors"
-                class:bg-yellow-300={selectedDate.getDate() === day}
-                on:click={() => selectDate(day)}
-              >
-                {day}
-              </button>
+          </ul>
+        {:else}
+          <p class="text-gray-200">No events scheduled.</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if showNotificationPanel}
+      <div in:fly={{ y: 50, duration: 500, easing: cubicOut }} out:fade={{ duration: 300 }} class="mt-8 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
+        <h3 class="text-2xl font-semibold mb-4">Notifications and Upcoming Events</h3>
+        {#if notifications.length > 0 || upcomingEvents.length > 0}
+          <ul class="space-y-2">
+            {#each notifications as notification (notification.id)}
+              <li class="flex items-center p-3 bg-white bg-opacity-20 rounded-lg">
+                <div class="mr-4">
+                  {#if notification.type === 'add'}
+                    <span class="text-green-400 text-2xl">+</span>
+                  {:else if notification.type === 'edit'}
+                    <span class="text-yellow-400 text-2xl">✎</span>
+                  {:else if notification.type === 'delete'}
+                    <span class="text-red-400 text-2xl">-</span>
+                  {/if}
+                </div>
+                <div class="flex-grow">
+                  <p>{notification.message}</p>
+                  <p class="text-sm text-gray-300">{formatNotificationDate(notification.timestamp)}</p>
+                </div>
+              </li>
             {/each}
-          </div>
-        </div>
-  
-        <!-- Events Section -->
-        <div class="flex-1 bg-white bg-opacity-10 backdrop-blur-md rounded-2xl shadow-xl p-6">
-          <h3 class="text-2xl font-semibold mb-4">Events for {formatDate(selectedDate)}</h3>
-          {#if selectedDateEvents.length > 0}
-            <ul class="space-y-2">
-              {#each selectedDateEvents as event (event.id)}
-                <li class="flex justify-between items-center p-3 bg-white bg-opacity-20 rounded-lg">
-                  <span>{event.title}</span>
-                  <div>
-                    <button on:click={() => editEvent(event)} class="text-yellow-200 hover:text-yellow-400 mr-2">Edit</button>
-                    <button on:click={() => deleteEvent(event.id)} class="text-red-300 hover:text-red-500">Delete</button>
-                  </div>
-                </li>
-              {/each}
-            </ul>
-          {:else}
-            <p class="text-gray-200">No events for this date.</p>
-          {/if}
-          <button on:click={() => { editingEvent = null; showModal = true; }} class="mt-4 px-6 py-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full text-white">
-            Add Event
+            {#each upcomingEvents.sort((a, b) => a.date.getTime() - b.date.getTime()) as event (event.id)}
+              <li class="flex items-center p-3 bg-white bg-opacity-20 rounded-lg">
+                <div class="mr-4">
+                  <span class="text-blue-400 text-2xl">!</span>
+                </div>
+                <div class="flex-grow">
+                  <p>Upcoming: {event.title}</p>
+                  <p class="text-sm text-gray-300">{formatDate(event.date)}</p>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="text-gray-200">No notifications or upcoming events.</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if showNotification}
+      <div
+        in:fly={{ y: -50, duration: 300, easing: cubicOut }}
+        out:fade
+        class="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg"
+      >
+        <p class="text-lg font-semibold">{notificationMessage}</p>
+      </div>
+    {/if}
+  </div>
+
+  {#if showModal}
+    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+      <div in:fade={{ duration: 300 }} class="bg-white bg-opacity-90 backdrop-blur-md p-6 rounded-lg w-96">
+        <h2 class="text-2xl font-semibold mb-4 text-gray-800">
+          {editingEvent ? 'Edit Event' : 'Add New Event'}
+        </h2>
+        <input
+          type="text"
+          bind:value={newEventTitle}
+          placeholder="Event title"
+          class="w-full p-2 border rounded mb-4 bg-white text-black bg-opacity-50"
+        />
+        <div class="flex justify-end">
+          <button
+            on:click={() => showModal = false}
+            class="px-4 py-2 text-gray-600 hover:text-gray-800 mr-2"
+          >
+            Cancel
+          </button>
+          <button
+            on:click={editingEvent ? updateEvent : addEvent}
+            class="px-6 py-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full text-white font-semibold hover:from-yellow-500 hover:to-orange-600 transition-all duration-300"
+          >
+            {editingEvent ? 'Update' : 'Add'}
           </button>
         </div>
       </div>
     </div>
-  
-    <!-- Modal -->
-    {#if showModal}
-      <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-        <div class="bg-white p-6 rounded-lg">
-          <h2 class="text-2xl font-semibold mb-4">{editingEvent ? 'Edit Event' : 'Add New Event'}</h2>
-          <input bind:value={newEventTitle} placeholder="Event title" class="w-full p-2 border rounded mb-4" />
-          <div class="flex justify-end">
-            <button on:click={() => showModal = false} class="text-gray-600 mr-2">Cancel</button>
-            <button on:click={editingEvent ? updateEvent : addEvent} class="bg-yellow-400 px-6 py-2 rounded text-white">
-              {editingEvent ? 'Update' : 'Add'}
-            </button>
-          </div>
-        </div>
-      </div>
-    {/if}
-  </main>
-  
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;800&display=swap');
-  
-    :global(body) {
-      font-family: 'Poppins', sans-serif;
-    }
-  </style>
-  
+  {/if}
+</main>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;800&display=swap');
+
+  :global(body) {
+    font-family: 'Poppins', sans-serif;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+</style>
+
