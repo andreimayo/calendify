@@ -13,7 +13,7 @@
     id: number;
     message: string;
     type: 'add' | 'edit' | 'delete';
-    timestamp: Date;
+    created_at: string;
   }
 
   let currentDate: Date = new Date();
@@ -27,22 +27,52 @@
   let notificationMessage: string = '';
   let notifications: Notification[] = [];
   let showNotificationPanel: boolean = false;
+  let upcomingEvents: Event[] = [];
 
-  onMount(() => {
-    const storedEvents = localStorage.getItem('calendarEvents');
-    if (storedEvents) {
-      events = JSON.parse(storedEvents).map((event: any): Event => ({
-        id: event.id || Date.now(),
-        title: event.title,
-        date: new Date(event.date)
-      }));
-    }
+  const API_URL = 'http://localhost/calendify/api/events.php';
+
+  onMount(async () => {
+    await fetchEvents();
+    await fetchNotifications();
     checkUpcomingEvents();
   });
 
-  $: {
-    if (events.length > 0) {
-      localStorage.setItem('calendarEvents', JSON.stringify(events));
+  async function fetchEvents() {
+    try {
+      const response = await fetch(API_URL);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch events');
+      }
+      const data = await response.json();
+      events = data.map((event: any): Event => ({
+        id: event.id,
+        title: event.title,
+        date: new Date(event.date)
+      }));
+    } catch (error: unknown) {
+      console.error('Error fetching events:', error);
+      showNotificationAlert(`Failed to fetch events: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async function fetchNotifications() {
+    try {
+      const response = await fetch(`${API_URL}?type=notifications`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch notifications');
+      }
+      const data = await response.json();
+      notifications = data.map((notification: any): Notification => ({
+        id: notification.id,
+        message: notification.message,
+        type: notification.type as 'add' | 'edit' | 'delete',
+        created_at: notification.created_at
+      }));
+    } catch (error: unknown) {
+      console.error('Error fetching notifications:', error);
+      showNotificationAlert(`Failed to fetch notifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -69,39 +99,41 @@
     selectedDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
   }
 
-  function showNotificationAlert(message: string): void {
-    notificationMessage = message;
-    showNotification = true;
-    setTimeout(() => {
-      showNotification = false;
-    }, 3000);
-  }
-
-  function addNotification(message: string, type: 'add' | 'edit' | 'delete'): void {
-    notifications = [
-      {
-        id: Date.now(),
-        message,
-        type,
-        timestamp: new Date()
-      },
-      ...notifications
-    ];
-  }
-
-  function addEvent(): void {
+  async function addEvent(): Promise<void> {
     if (newEventTitle.trim()) {
-      const newEvent: Event = {
-        id: Date.now(),
-        title: newEventTitle,
-        date: selectedDate
-      };
-      events = [...events, newEvent];
-      newEventTitle = '';
-      showModal = false;
-      showNotificationAlert('Event added successfully');
-      addNotification(`Added event: ${newEvent.title}`, 'add');
-      checkUpcomingEvents();
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            title: newEventTitle,
+            date: selectedDate.toISOString().split('T')[0]
+          }),
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to add event');
+        }
+
+        const data = await response.json();
+        const newEvent: Event = {
+          id: data.id,
+          title: newEventTitle,
+          date: selectedDate
+        };
+        events = [...events, newEvent];
+        newEventTitle = '';
+        showModal = false;
+        showNotificationAlert('Event added successfully');
+        await fetchNotifications();
+        checkUpcomingEvents();
+      } catch (error: unknown) {
+        console.error('Error adding event:', error);
+        showNotificationAlert(`Failed to add event: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     }
   }
 
@@ -111,26 +143,66 @@
     showModal = true;
   }
 
-  function updateEvent(): void {
+  async function updateEvent(): Promise<void> {
     if (!editingEvent || !newEventTitle.trim()) return;
-    const eventId = editingEvent.id;
-    events = events.map(e => e.id === eventId ? { ...e, title: newEventTitle } : e);
-    addNotification(`Updated event: ${newEventTitle}`, 'edit');
-    newEventTitle = '';
-    editingEvent = null;
-    showModal = false;
-    showNotificationAlert('Event updated successfully');
-    checkUpcomingEvents();
+    try {
+      const response = await fetch(API_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: editingEvent.id,
+          title: newEventTitle,
+          date: editingEvent.date.toISOString().split('T')[0]
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update event');
+      }
+
+      events = events.map(e => e.id === (editingEvent?.id ?? -1) ? { ...e, title: newEventTitle } : e);
+      newEventTitle = '';
+      editingEvent = null;
+      showModal = false;
+      showNotificationAlert('Event updated successfully');
+      await fetchNotifications();
+      checkUpcomingEvents();
+    } catch (error: unknown) {
+      console.error('Error updating event:', error);
+      showNotificationAlert(`Failed to update event: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
-  function deleteEvent(id: number): void {
-    const eventToDelete = events.find(e => e.id === id);
-    if (eventToDelete) {
-      addNotification(`Deleted event: ${eventToDelete.title}`, 'delete');
+  async function deleteEvent(id: number): Promise<void> {
+    try {
+      const response = await fetch(`${API_URL}?id=${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete event');
+      }
+
+      events = events.filter(e => e.id !== id);
+      showNotificationAlert('Event deleted successfully');
+      await fetchNotifications();
+      checkUpcomingEvents();
+    } catch (error: unknown) {
+      console.error('Error deleting event:', error);
+      showNotificationAlert(`Failed to delete event: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-    events = events.filter(e => e.id !== id);
-    showNotificationAlert('Event deleted successfully');
-    checkUpcomingEvents();
+  }
+
+  function showNotificationAlert(message: string): void {
+    notificationMessage = message;
+    showNotification = true;
+    setTimeout(() => {
+      showNotification = false;
+    }, 3000);
   }
 
   function checkUpcomingEvents(): void {
@@ -140,8 +212,6 @@
       const eventDate = new Date(event.date);
       return eventDate >= today && eventDate <= nextWeek;
     });
-    // Trigger reactivity
-    notifications = notifications;
   }
 
   $: selectedDateEvents = events.filter(
@@ -152,7 +222,8 @@
     return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   }
 
-  function formatNotificationDate(date: Date): string {
+  function formatNotificationDate(dateString: string): string {
+    const date = new Date(dateString);
     return date.toLocaleString('en-US', { 
       year: 'numeric', 
       month: 'short', 
@@ -165,9 +236,6 @@
   function NotificationIcon(): string {
     return '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>';
   }
-
-  let upcomingEvents: Event[] = [];
-
 </script>
 
 <main class="min-h-screen bg-gradient-to-br from-emerald-400 via-cyan-500 to-blue-500 text-white p-4">
@@ -326,7 +394,7 @@
                 </div>
                 <div class="flex-grow">
                   <p>{notification.message}</p>
-                  <p class="text-sm text-gray-300">{formatNotificationDate(notification.timestamp)}</p>
+                  <p class="text-sm text-gray-300">{formatNotificationDate(notification.created_at)}</p>
                 </div>
               </li>
             {/each}
